@@ -1,2 +1,0 @@
-# madden-league-service
-
