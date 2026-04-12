@@ -52,15 +52,6 @@ def safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None or value == "":
-            return default
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
 def safe_text(value: Any, default: str = "") -> str:
     if value is None:
         return default
@@ -86,13 +77,16 @@ def resolve_player_overall(row: dict[str, Any]) -> int:
 
 
 def resolve_dev_trait(row: dict[str, Any]) -> str:
-    raw = safe_int(row.get("dev_trait"), -1)
-    if raw in DEV_TRAIT_LABELS:
-        return DEV_TRAIT_LABELS[raw]
+    raw = row.get("dev_trait")
+    if raw is not None:
+        raw_int = safe_int(raw, -1)
+        if raw_int in DEV_TRAIT_LABELS:
+            return DEV_TRAIT_LABELS[raw_int]
 
     text_candidates = [
         row.get("dev_trait_label"),
         row.get("development_trait"),
+        row.get("trait_name"),
     ]
     for candidate in text_candidates:
         text = safe_text(candidate)
@@ -111,7 +105,6 @@ def search_players(db: Database, query: str, limit: int = 10) -> list[dict[str, 
             p.full_name,
             p.position,
             p.age,
-            p.dev_trait,
             p.overall_rating,
             p.player_best_ovr,
             p.team_id,
@@ -149,7 +142,6 @@ def get_player_by_roster_id(db: Database, roster_id: int) -> Optional[dict[str, 
             p.full_name,
             p.position,
             p.age,
-            p.dev_trait,
             p.overall_rating,
             p.player_best_ovr,
             p.team_id,
@@ -213,7 +205,6 @@ def get_team_roster(db: Database, team_name: str) -> list[dict[str, Any]]:
             p.full_name,
             p.position,
             p.age,
-            p.dev_trait,
             p.overall_rating,
             p.player_best_ovr,
             t.team_name,
