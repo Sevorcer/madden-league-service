@@ -3,6 +3,7 @@ from discord.ext import commands
 
 from config import settings
 from database import Database
+from commands.league_commands import register_league_commands
 
 intents = discord.Intents.default()
 intents.guilds = True
@@ -10,6 +11,8 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 db = Database(settings)
+
+register_league_commands(bot)
 
 
 @bot.tree.command(name="ping", description="Check if the bot is online.")
