@@ -55,9 +55,9 @@ async def on_ready() -> None:
 
 
 def main() -> None:
-    if not settings.discord_bot_token:
+    if not settings.bot_token:
         raise RuntimeError("DISCORD_BOT_TOKEN is not set.")
-    bot.run(settings.discord_bot_token)
+    bot.run(settings.bot_token)
 
 
 if __name__ == "__main__":

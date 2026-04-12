@@ -6,7 +6,6 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-
 load_dotenv()
 
 
@@ -55,3 +54,6 @@ def load_settings() -> Settings:
         trade_required_approvals=int(os.getenv("TRADE_REQUIRED_APPROVALS", "2")),
         trade_required_denials=int(os.getenv("TRADE_REQUIRED_DENIALS", "2")),
     )
+
+
+settings = load_settings()
