@@ -22,26 +22,21 @@ POSITION_SORT_ORDER = {
     "C": 8,
     "RG": 9,
     "RT": 10,
-    "LEDGE": 11,
-    "REDGE": 12,
-    "LE": 13,
-    "RE": 14,
-    "DT": 15,
-    "LOLB": 16,
-    "MLB": 17,
-    "ROLB": 18,
-    "SAM": 19,
-    "MIKE": 20,
-    "WILL": 21,
-    "CB": 22,
-    "FS": 23,
-    "SS": 24,
-    "K": 25,
-    "P": 26,
-    "LS": 27,
+    "LEDGE": 12,
+    "REDGE": 13,
+    "LE": 14,
+    "RE": 15,
+    "DT": 16,
+    "LOLB": 17,
+    "MLB": 18,
+    "ROLB": 19,
+    "CB": 20,
+    "FS": 21,
+    "SS": 22,
+    "K": 23,
+    "P": 24,
+    "LS": 25,
 }
-
-_SCHEMA_CACHE: dict[str, set[str]] = {}
 
 
 def safe_int(value: Any, default: int = 0) -> int:
@@ -73,43 +68,15 @@ def normalize_search_text(value: str) -> str:
     return " ".join(safe_text(value).lower().split())
 
 
-def get_table_columns(db: Database, table_name: str) -> set[str]:
-    if table_name in _SCHEMA_CACHE:
-        return _SCHEMA_CACHE[table_name]
-
-    rows = db.fetch_all(
-        """
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = %s
-        """,
-        (table_name,),
-    )
-    cols = {safe_text(row.get("column_name")) for row in rows if safe_text(row.get("column_name"))}
-    _SCHEMA_CACHE[table_name] = cols
-    return cols
-
-
-def pick_existing_column(db: Database, table_name: str, candidates: list[str]) -> Optional[str]:
-    cols = get_table_columns(db, table_name)
-    for candidate in candidates:
-        if candidate in cols:
-            return candidate
-    return None
-
-
-def sql_select(alias: str, col: Optional[str], as_name: str) -> str:
-    if col:
-        return f"{alias}.{col} AS {as_name}"
-    return f"NULL AS {as_name}"
-
-
 def resolve_display_overall(row: dict[str, Any]) -> int:
     candidates = [
         row.get("overall_rating"),
         row.get("player_best_ovr"),
+        row.get("playerBestOvr"),
+        row.get("player_scheme_ovr"),
+        row.get("playerSchemeOvr"),
         row.get("team_ovr"),
+        row.get("teamSchemeOvr"),
     ]
     for candidate in candidates:
         value = safe_int(candidate, 0)
@@ -133,99 +100,70 @@ def resolve_dev_trait_label(row: dict[str, Any]) -> str:
 
 
 def fetch_player_search_results(db: Database, name: str, limit: int = 10) -> list[dict[str, Any]]:
-    players_table = "players"
-    teams_table = "teams"
-
-    speed_col = pick_existing_column(db, players_table, ["speed_rating", "speed"])
-    strength_col = pick_existing_column(db, players_table, ["strength_rating", "strength"])
-    awareness_col = pick_existing_column(db, players_table, ["awareness_rating", "awareness"])
-    cod_col = pick_existing_column(
-        db,
-        players_table,
-        ["change_of_direction_rating", "change_of_direction", "cod_rating", "cod"],
-    )
-    dev_trait_col = pick_existing_column(db, players_table, ["dev_trait"])
-    dev_trait_label_col = pick_existing_column(db, players_table, ["dev_trait_label", "development_trait", "trait_name"])
-
     search = f"%{normalize_search_text(name)}%"
-    rows = db.fetch_all(
-        f"""
+    return db.fetch_all(
+        """
         SELECT
-            p.roster_id,
-            p.full_name,
+            p.rosterId AS roster_id,
+            CONCAT(COALESCE(p.firstName, ''), ' ', COALESCE(p.lastName, '')) AS full_name,
             p.position,
             p.age,
-            p.overall_rating,
-            p.player_best_ovr,
-            p.team_id,
-            t.team_name,
-            t.team_ovr,
-            {sql_select("p", dev_trait_col, "dev_trait")},
-            {sql_select("p", dev_trait_label_col, "dev_trait_label")},
-            {sql_select("p", speed_col, "speed")},
-            {sql_select("p", strength_col, "strength")},
-            {sql_select("p", awareness_col, "awareness")},
-            {sql_select("p", cod_col, "change_of_direction")}
+            p.devTrait AS dev_trait,
+            p.overallRating AS overall_rating,
+            p.playerBestOvr AS player_best_ovr,
+            p.playerSchemeOvr AS player_scheme_ovr,
+            p.speedRating AS speed,
+            p.strengthRating AS strength,
+            p.awareRating AS awareness,
+            p.changeOfDirectionRating AS change_of_direction,
+            p.teamId AS team_id,
+            t.displayName AS team_name,
+            t.teamOvr AS team_ovr
         FROM players p
         LEFT JOIN teams t
-            ON t.team_id = p.team_id
-        WHERE LOWER(COALESCE(p.full_name, '')) LIKE %s
+            ON t.teamId = p.teamId
+        WHERE LOWER(CONCAT(COALESCE(p.firstName, ''), ' ', COALESCE(p.lastName, ''))) LIKE %s
         ORDER BY
             CASE
-                WHEN LOWER(COALESCE(p.full_name, '')) = LOWER(%s) THEN 0
-                WHEN LOWER(COALESCE(p.full_name, '')) LIKE LOWER(%s) THEN 1
+                WHEN LOWER(CONCAT(COALESCE(p.firstName, ''), ' ', COALESCE(p.lastName, ''))) = LOWER(%s) THEN 0
+                WHEN LOWER(CONCAT(COALESCE(p.firstName, ''), ' ', COALESCE(p.lastName, ''))) LIKE LOWER(%s) THEN 1
                 ELSE 2
             END,
-            COALESCE(NULLIF(p.overall_rating, 0), p.player_best_ovr, 0) DESC,
-            p.full_name ASC
+            COALESCE(NULLIF(p.overallRating, 0), p.playerBestOvr, p.playerSchemeOvr, 0) DESC,
+            CONCAT(COALESCE(p.firstName, ''), ' ', COALESCE(p.lastName, '')) ASC
         LIMIT %s
         """,
         (search, safe_text(name), f"{safe_text(name)}%", limit),
     )
-    return rows
 
 
 def fetch_player_by_roster_id(db: Database, roster_id: int) -> Optional[dict[str, Any]]:
-    players_table = "players"
-
-    speed_col = pick_existing_column(db, players_table, ["speed_rating", "speed"])
-    strength_col = pick_existing_column(db, players_table, ["strength_rating", "strength"])
-    awareness_col = pick_existing_column(db, players_table, ["awareness_rating", "awareness"])
-    cod_col = pick_existing_column(
-        db,
-        players_table,
-        ["change_of_direction_rating", "change_of_direction", "cod_rating", "cod"],
-    )
-    dev_trait_col = pick_existing_column(db, players_table, ["dev_trait"])
-    dev_trait_label_col = pick_existing_column(db, players_table, ["dev_trait_label", "development_trait", "trait_name"])
-
-    row = db.fetch_one(
-        f"""
+    return db.fetch_one(
+        """
         SELECT
-            p.roster_id,
-            p.full_name,
+            p.rosterId AS roster_id,
+            CONCAT(COALESCE(p.firstName, ''), ' ', COALESCE(p.lastName, '')) AS full_name,
             p.position,
             p.age,
-            p.overall_rating,
-            p.player_best_ovr,
-            p.team_id,
-            t.team_name,
-            t.team_ovr,
-            {sql_select("p", dev_trait_col, "dev_trait")},
-            {sql_select("p", dev_trait_label_col, "dev_trait_label")},
-            {sql_select("p", speed_col, "speed")},
-            {sql_select("p", strength_col, "strength")},
-            {sql_select("p", awareness_col, "awareness")},
-            {sql_select("p", cod_col, "change_of_direction")}
+            p.devTrait AS dev_trait,
+            p.overallRating AS overall_rating,
+            p.playerBestOvr AS player_best_ovr,
+            p.playerSchemeOvr AS player_scheme_ovr,
+            p.speedRating AS speed,
+            p.strengthRating AS strength,
+            p.awareRating AS awareness,
+            p.changeOfDirectionRating AS change_of_direction,
+            p.teamId AS team_id,
+            t.displayName AS team_name,
+            t.teamOvr AS team_ovr
         FROM players p
         LEFT JOIN teams t
-            ON t.team_id = p.team_id
-        WHERE p.roster_id = %s
+            ON t.teamId = p.teamId
+        WHERE p.rosterId = %s
         LIMIT 1
         """,
         (roster_id,),
     )
-    return row
 
 
 def resolve_team_row(db: Database, team_name: str) -> Optional[dict[str, Any]]:
@@ -233,20 +171,20 @@ def resolve_team_row(db: Database, team_name: str) -> Optional[dict[str, Any]]:
     return db.fetch_one(
         """
         SELECT
-            t.team_id,
-            t.team_name,
-            t.team_ovr,
-            t.conference_name,
-            t.division_name
+            t.teamId AS team_id,
+            t.displayName AS team_name,
+            t.teamOvr AS team_ovr,
+            t.conferenceName AS conference_name,
+            t.divisionName AS division_name
         FROM teams t
-        WHERE LOWER(COALESCE(t.team_name, '')) LIKE %s
+        WHERE LOWER(COALESCE(t.displayName, '')) LIKE %s
         ORDER BY
             CASE
-                WHEN LOWER(COALESCE(t.team_name, '')) = LOWER(%s) THEN 0
-                WHEN LOWER(COALESCE(t.team_name, '')) LIKE LOWER(%s) THEN 1
+                WHEN LOWER(COALESCE(t.displayName, '')) = LOWER(%s) THEN 0
+                WHEN LOWER(COALESCE(t.displayName, '')) LIKE LOWER(%s) THEN 1
                 ELSE 2
             END,
-            t.team_name ASC
+            t.displayName ASC
         LIMIT 1
         """,
         (search, safe_text(team_name), f"{safe_text(team_name)}%"),
@@ -260,13 +198,13 @@ def fetch_team_standing(db: Database, team_id: int) -> Optional[dict[str, Any]]:
             wins,
             losses,
             ties,
-            win_pct,
+            winPct AS win_pct,
             seed,
-            pts_for,
-            pts_against,
-            turnover_diff
+            ptsFor AS pts_for,
+            ptsAgainst AS pts_against,
+            turnoverDiff AS turnover_diff
         FROM standings
-        WHERE team_id = %s
+        WHERE teamId = %s
         LIMIT 1
         """,
         (team_id,),
@@ -274,43 +212,31 @@ def fetch_team_standing(db: Database, team_id: int) -> Optional[dict[str, Any]]:
 
 
 def fetch_team_roster_rows(db: Database, team_id: int) -> list[dict[str, Any]]:
-    players_table = "players"
-
-    speed_col = pick_existing_column(db, players_table, ["speed_rating", "speed"])
-    strength_col = pick_existing_column(db, players_table, ["strength_rating", "strength"])
-    awareness_col = pick_existing_column(db, players_table, ["awareness_rating", "awareness"])
-    cod_col = pick_existing_column(
-        db,
-        players_table,
-        ["change_of_direction_rating", "change_of_direction", "cod_rating", "cod"],
-    )
-    dev_trait_col = pick_existing_column(db, players_table, ["dev_trait"])
-    dev_trait_label_col = pick_existing_column(db, players_table, ["dev_trait_label", "development_trait", "trait_name"])
-
     rows = db.fetch_all(
-        f"""
+        """
         SELECT
-            p.roster_id,
-            p.full_name,
+            p.rosterId AS roster_id,
+            CONCAT(COALESCE(p.firstName, ''), ' ', COALESCE(p.lastName, '')) AS full_name,
             p.position,
             p.age,
-            p.overall_rating,
-            p.player_best_ovr,
-            p.team_id,
-            t.team_name,
-            t.team_ovr,
-            {sql_select("p", dev_trait_col, "dev_trait")},
-            {sql_select("p", dev_trait_label_col, "dev_trait_label")},
-            {sql_select("p", speed_col, "speed")},
-            {sql_select("p", strength_col, "strength")},
-            {sql_select("p", awareness_col, "awareness")},
-            {sql_select("p", cod_col, "change_of_direction")}
+            p.devTrait AS dev_trait,
+            p.overallRating AS overall_rating,
+            p.playerBestOvr AS player_best_ovr,
+            p.playerSchemeOvr AS player_scheme_ovr,
+            p.speedRating AS speed,
+            p.strengthRating AS strength,
+            p.awareRating AS awareness,
+            p.changeOfDirectionRating AS change_of_direction,
+            p.teamId AS team_id,
+            t.displayName AS team_name,
+            t.teamOvr AS team_ovr
         FROM players p
-        JOIN teams t ON t.team_id = p.team_id
-        WHERE p.team_id = %s
+        JOIN teams t
+            ON t.teamId = p.teamId
+        WHERE p.teamId = %s
         ORDER BY
-            COALESCE(NULLIF(p.overall_rating, 0), p.player_best_ovr, 0) DESC,
-            p.full_name ASC
+            COALESCE(NULLIF(p.overallRating, 0), p.playerBestOvr, p.playerSchemeOvr, 0) DESC,
+            CONCAT(COALESCE(p.firstName, ''), ' ', COALESCE(p.lastName, '')) ASC
         """,
         (team_id,),
     )
@@ -329,21 +255,22 @@ def fetch_standings_rows(db: Database) -> list[dict[str, Any]]:
     return db.fetch_all(
         """
         SELECT
-            t.team_name,
-            t.conference_name,
-            t.division_name,
-            t.team_ovr,
+            t.displayName AS team_name,
+            t.conferenceName AS conference_name,
+            t.divisionName AS division_name,
+            t.teamOvr AS team_ovr,
             s.wins,
             s.losses,
             s.ties,
-            s.win_pct,
+            s.winPct AS win_pct,
             s.seed,
-            s.pts_for,
-            s.pts_against,
-            s.turnover_diff
+            s.ptsFor AS pts_for,
+            s.ptsAgainst AS pts_against,
+            s.turnoverDiff AS turnover_diff
         FROM standings s
-        JOIN teams t ON t.team_id = s.team_id
-        ORDER BY s.wins DESC, s.win_pct DESC, s.pts_for DESC, t.team_name ASC
+        JOIN teams t
+            ON t.teamId = s.teamId
+        ORDER BY s.wins DESC, s.winPct DESC, s.ptsFor DESC, t.displayName ASC
         """
     )
 
@@ -352,14 +279,16 @@ def fetch_passing_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]
     return db.fetch_all(
         """
         SELECT
-            pps.roster_id,
-            COALESCE(MAX(p.full_name), MAX(pps.full_name), 'Unknown') AS player_name,
-            COALESCE(MAX(t.team_name), 'Unknown Team') AS team_name,
-            SUM(COALESCE(pps.pass_yds, 0)) AS stat_value
+            pps.rosterId AS roster_id,
+            COALESCE(MAX(CONCAT(COALESCE(p.firstName, ''), ' ', COALESCE(p.lastName, ''))), 'Unknown') AS player_name,
+            COALESCE(MAX(t.displayName), 'Unknown Team') AS team_name,
+            SUM(COALESCE(pps.passYds, 0)) AS stat_value
         FROM player_passing_stats pps
-        LEFT JOIN players p ON p.roster_id = pps.roster_id
-        LEFT JOIN teams t ON t.team_id = COALESCE(p.team_id, pps.team_id)
-        GROUP BY pps.roster_id
+        LEFT JOIN players p
+            ON p.rosterId = pps.rosterId
+        LEFT JOIN teams t
+            ON t.teamId = COALESCE(p.teamId, pps.teamId)
+        GROUP BY pps.rosterId
         ORDER BY stat_value DESC, player_name ASC
         LIMIT %s
         """,
@@ -371,14 +300,16 @@ def fetch_rushing_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]
     return db.fetch_all(
         """
         SELECT
-            prs.roster_id,
-            COALESCE(MAX(p.full_name), MAX(prs.full_name), 'Unknown') AS player_name,
-            COALESCE(MAX(t.team_name), 'Unknown Team') AS team_name,
-            SUM(COALESCE(prs.rush_yds, 0)) AS stat_value
+            prs.rosterId AS roster_id,
+            COALESCE(MAX(CONCAT(COALESCE(p.firstName, ''), ' ', COALESCE(p.lastName, ''))), 'Unknown') AS player_name,
+            COALESCE(MAX(t.displayName), 'Unknown Team') AS team_name,
+            SUM(COALESCE(prs.rushYds, 0)) AS stat_value
         FROM player_rushing_stats prs
-        LEFT JOIN players p ON p.roster_id = prs.roster_id
-        LEFT JOIN teams t ON t.team_id = COALESCE(p.team_id, prs.team_id)
-        GROUP BY prs.roster_id
+        LEFT JOIN players p
+            ON p.rosterId = prs.rosterId
+        LEFT JOIN teams t
+            ON t.teamId = COALESCE(p.teamId, prs.teamId)
+        GROUP BY prs.rosterId
         ORDER BY stat_value DESC, player_name ASC
         LIMIT %s
         """,
@@ -390,14 +321,16 @@ def fetch_receiving_leaders(db: Database, limit: int = 10) -> list[dict[str, Any
     return db.fetch_all(
         """
         SELECT
-            prs.roster_id,
-            COALESCE(MAX(p.full_name), MAX(prs.full_name), 'Unknown') AS player_name,
-            COALESCE(MAX(t.team_name), 'Unknown Team') AS team_name,
-            SUM(COALESCE(prs.rec_yds, 0)) AS stat_value
+            prs.rosterId AS roster_id,
+            COALESCE(MAX(CONCAT(COALESCE(p.firstName, ''), ' ', COALESCE(p.lastName, ''))), 'Unknown') AS player_name,
+            COALESCE(MAX(t.displayName), 'Unknown Team') AS team_name,
+            SUM(COALESCE(prs.recYds, 0)) AS stat_value
         FROM player_receiving_stats prs
-        LEFT JOIN players p ON p.roster_id = prs.roster_id
-        LEFT JOIN teams t ON t.team_id = COALESCE(p.team_id, prs.team_id)
-        GROUP BY prs.roster_id
+        LEFT JOIN players p
+            ON p.rosterId = prs.rosterId
+        LEFT JOIN teams t
+            ON t.teamId = COALESCE(p.teamId, prs.teamId)
+        GROUP BY prs.rosterId
         ORDER BY stat_value DESC, player_name ASC
         LIMIT %s
         """,
@@ -409,14 +342,16 @@ def fetch_sack_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
     return db.fetch_all(
         """
         SELECT
-            pds.roster_id,
-            COALESCE(MAX(p.full_name), MAX(pds.full_name), 'Unknown') AS player_name,
-            COALESCE(MAX(t.team_name), 'Unknown Team') AS team_name,
-            SUM(COALESCE(pds.def_sacks, 0)) AS stat_value
+            pds.rosterId AS roster_id,
+            COALESCE(MAX(CONCAT(COALESCE(p.firstName, ''), ' ', COALESCE(p.lastName, ''))), 'Unknown') AS player_name,
+            COALESCE(MAX(t.displayName), 'Unknown Team') AS team_name,
+            SUM(COALESCE(pds.defSacks, 0)) AS stat_value
         FROM player_defense_stats pds
-        LEFT JOIN players p ON p.roster_id = pds.roster_id
-        LEFT JOIN teams t ON t.team_id = COALESCE(p.team_id, pds.team_id)
-        GROUP BY pds.roster_id
+        LEFT JOIN players p
+            ON p.rosterId = pds.rosterId
+        LEFT JOIN teams t
+            ON t.teamId = COALESCE(p.teamId, pds.teamId)
+        GROUP BY pds.rosterId
         ORDER BY stat_value DESC, player_name ASC
         LIMIT %s
         """,
@@ -428,14 +363,16 @@ def fetch_interception_leaders(db: Database, limit: int = 10) -> list[dict[str, 
     return db.fetch_all(
         """
         SELECT
-            pds.roster_id,
-            COALESCE(MAX(p.full_name), MAX(pds.full_name), 'Unknown') AS player_name,
-            COALESCE(MAX(t.team_name), 'Unknown Team') AS team_name,
-            SUM(COALESCE(pds.def_ints, 0)) AS stat_value
+            pds.rosterId AS roster_id,
+            COALESCE(MAX(CONCAT(COALESCE(p.firstName, ''), ' ', COALESCE(p.lastName, ''))), 'Unknown') AS player_name,
+            COALESCE(MAX(t.displayName), 'Unknown Team') AS team_name,
+            SUM(COALESCE(pds.defInts, 0)) AS stat_value
         FROM player_defense_stats pds
-        LEFT JOIN players p ON p.roster_id = pds.roster_id
-        LEFT JOIN teams t ON t.team_id = COALESCE(p.team_id, pds.team_id)
-        GROUP BY pds.roster_id
+        LEFT JOIN players p
+            ON p.rosterId = pds.rosterId
+        LEFT JOIN teams t
+            ON t.teamId = COALESCE(p.teamId, pds.teamId)
+        GROUP BY pds.rosterId
         ORDER BY stat_value DESC, player_name ASC
         LIMIT %s
         """,
@@ -444,7 +381,8 @@ def fetch_interception_leaders(db: Database, limit: int = 10) -> list[dict[str, 
 
 
 def fetch_stat_leaders(db: Database, category: str, limit: int = 10) -> list[dict[str, Any]]:
-    normalized = safe_text(category).lower()
+    normalized = normalize_search_text(category)
+
     if normalized in {"passing", "pass", "passing yards", "pass yards"}:
         return fetch_passing_leaders(db, limit)
     if normalized in {"rushing", "rush", "rushing yards", "rush yards"}:
@@ -455,4 +393,5 @@ def fetch_stat_leaders(db: Database, category: str, limit: int = 10) -> list[dic
         return fetch_sack_leaders(db, limit)
     if normalized in {"interceptions", "interception", "ints", "int"}:
         return fetch_interception_leaders(db, limit)
+
     raise ValueError(f"Unsupported leader category: {category}")
