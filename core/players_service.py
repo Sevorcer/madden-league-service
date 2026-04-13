@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from core.madden_queries import (
-    dev_trait_to_label,
     fetch_player_by_roster_id,
     fetch_player_search_results,
+    resolve_dev_trait_label,
     resolve_display_overall,
     safe_int,
     safe_text,
@@ -21,10 +21,11 @@ def build_player_card_data(row: dict[str, Any]) -> dict[str, Any]:
         "position": safe_text(row.get("position"), "N/A"),
         "age": safe_int(row.get("age")),
         "overall": resolve_display_overall(row),
-        "dev_trait": dev_trait_to_label(
-            row.get("dev_trait"),
-            row.get("resolved_dev_trait_label") or row.get("dev_trait_label"),
-        ),
+        "dev_trait": resolve_dev_trait_label(row),
+        "speed": safe_int(row.get("speed")),
+        "strength": safe_int(row.get("strength")),
+        "awareness": safe_int(row.get("awareness")),
+        "change_of_direction": safe_int(row.get("change_of_direction")),
     }
 
 

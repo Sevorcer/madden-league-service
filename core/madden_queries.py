@@ -41,6 +41,8 @@ POSITION_SORT_ORDER = {
     "LS": 27,
 }
 
+_SCHEMA_CACHE: dict[str, set[str]] = {}
+
 
 def safe_int(value: Any, default: int = 0) -> int:
     try:
@@ -67,12 +69,40 @@ def safe_text(value: Any, default: str = "") -> str:
     return text if text else default
 
 
-def dev_trait_to_label(raw_value: Any, fallback_label: str = "") -> str:
-    raw_int = safe_int(raw_value, -1)
-    if raw_int in DEV_TRAIT_LABELS:
-        return DEV_TRAIT_LABELS[raw_int]
-    fallback = safe_text(fallback_label)
-    return fallback or "Unknown"
+def normalize_search_text(value: str) -> str:
+    return " ".join(safe_text(value).lower().split())
+
+
+def get_table_columns(db: Database, table_name: str) -> set[str]:
+    if table_name in _SCHEMA_CACHE:
+        return _SCHEMA_CACHE[table_name]
+
+    rows = db.fetch_all(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = %s
+        """,
+        (table_name,),
+    )
+    cols = {safe_text(row.get("column_name")) for row in rows if safe_text(row.get("column_name"))}
+    _SCHEMA_CACHE[table_name] = cols
+    return cols
+
+
+def pick_existing_column(db: Database, table_name: str, candidates: list[str]) -> Optional[str]:
+    cols = get_table_columns(db, table_name)
+    for candidate in candidates:
+        if candidate in cols:
+            return candidate
+    return None
+
+
+def sql_select(alias: str, col: Optional[str], as_name: str) -> str:
+    if col:
+        return f"{alias}.{col} AS {as_name}"
+    return f"NULL AS {as_name}"
 
 
 def resolve_display_overall(row: dict[str, Any]) -> int:
@@ -88,10 +118,38 @@ def resolve_display_overall(row: dict[str, Any]) -> int:
     return 0
 
 
+def resolve_dev_trait_label(row: dict[str, Any]) -> str:
+    raw = row.get("dev_trait")
+    raw_int = safe_int(raw, -1)
+    if raw_int in DEV_TRAIT_LABELS:
+        return DEV_TRAIT_LABELS[raw_int]
+
+    for key in ["dev_trait_label", "development_trait", "trait_name"]:
+        value = safe_text(row.get(key))
+        if value:
+            return value
+
+    return "Unknown"
+
+
 def fetch_player_search_results(db: Database, name: str, limit: int = 10) -> list[dict[str, Any]]:
-    search = f"%{safe_text(name).lower()}%"
+    players_table = "players"
+    teams_table = "teams"
+
+    speed_col = pick_existing_column(db, players_table, ["speed_rating", "speed"])
+    strength_col = pick_existing_column(db, players_table, ["strength_rating", "strength"])
+    awareness_col = pick_existing_column(db, players_table, ["awareness_rating", "awareness"])
+    cod_col = pick_existing_column(
+        db,
+        players_table,
+        ["change_of_direction_rating", "change_of_direction", "cod_rating", "cod"],
+    )
+    dev_trait_col = pick_existing_column(db, players_table, ["dev_trait"])
+    dev_trait_label_col = pick_existing_column(db, players_table, ["dev_trait_label", "development_trait", "trait_name"])
+
+    search = f"%{normalize_search_text(name)}%"
     rows = db.fetch_all(
-        """
+        f"""
         SELECT
             p.roster_id,
             p.full_name,
@@ -101,7 +159,13 @@ def fetch_player_search_results(db: Database, name: str, limit: int = 10) -> lis
             p.player_best_ovr,
             p.team_id,
             t.team_name,
-            t.team_ovr
+            t.team_ovr,
+            {sql_select("p", dev_trait_col, "dev_trait")},
+            {sql_select("p", dev_trait_label_col, "dev_trait_label")},
+            {sql_select("p", speed_col, "speed")},
+            {sql_select("p", strength_col, "strength")},
+            {sql_select("p", awareness_col, "awareness")},
+            {sql_select("p", cod_col, "change_of_direction")}
         FROM players p
         LEFT JOIN teams t
             ON t.team_id = p.team_id
@@ -118,14 +182,25 @@ def fetch_player_search_results(db: Database, name: str, limit: int = 10) -> lis
         """,
         (search, safe_text(name), f"{safe_text(name)}%", limit),
     )
-    for row in rows:
-        row["resolved_dev_trait_label"] = row.get("dev_trait_label")
     return rows
 
 
 def fetch_player_by_roster_id(db: Database, roster_id: int) -> Optional[dict[str, Any]]:
+    players_table = "players"
+
+    speed_col = pick_existing_column(db, players_table, ["speed_rating", "speed"])
+    strength_col = pick_existing_column(db, players_table, ["strength_rating", "strength"])
+    awareness_col = pick_existing_column(db, players_table, ["awareness_rating", "awareness"])
+    cod_col = pick_existing_column(
+        db,
+        players_table,
+        ["change_of_direction_rating", "change_of_direction", "cod_rating", "cod"],
+    )
+    dev_trait_col = pick_existing_column(db, players_table, ["dev_trait"])
+    dev_trait_label_col = pick_existing_column(db, players_table, ["dev_trait_label", "development_trait", "trait_name"])
+
     row = db.fetch_one(
-        """
+        f"""
         SELECT
             p.roster_id,
             p.full_name,
@@ -135,7 +210,13 @@ def fetch_player_by_roster_id(db: Database, roster_id: int) -> Optional[dict[str
             p.player_best_ovr,
             p.team_id,
             t.team_name,
-            t.team_ovr
+            t.team_ovr,
+            {sql_select("p", dev_trait_col, "dev_trait")},
+            {sql_select("p", dev_trait_label_col, "dev_trait_label")},
+            {sql_select("p", speed_col, "speed")},
+            {sql_select("p", strength_col, "strength")},
+            {sql_select("p", awareness_col, "awareness")},
+            {sql_select("p", cod_col, "change_of_direction")}
         FROM players p
         LEFT JOIN teams t
             ON t.team_id = p.team_id
@@ -144,42 +225,16 @@ def fetch_player_by_roster_id(db: Database, roster_id: int) -> Optional[dict[str
         """,
         (roster_id,),
     )
-    if row:
-        row["resolved_dev_trait_label"] = row.get("dev_trait_label")
     return row
 
 
-def fetch_standings_rows(db: Database) -> list[dict[str, Any]]:
-    return db.fetch_all(
-        """
-        SELECT
-            t.team_name,
-            t.conference_name,
-            t.division_name,
-            t.team_ovr,
-            s.wins,
-            s.losses,
-            s.ties,
-            s.win_pct,
-            s.seed,
-            s.pts_for,
-            s.pts_against,
-            s.turnover_diff
-        FROM standings s
-        JOIN teams t ON t.team_id = s.team_id
-        ORDER BY s.wins DESC, s.win_pct DESC, s.pts_for DESC, t.team_name ASC
-        """
-    )
-
-
 def resolve_team_row(db: Database, team_name: str) -> Optional[dict[str, Any]]:
-    search = f"%{safe_text(team_name).lower()}%"
+    search = f"%{normalize_search_text(team_name)}%"
     return db.fetch_one(
         """
         SELECT
             t.team_id,
             t.team_name,
-            t.team_abbrev,
             t.team_ovr,
             t.conference_name,
             t.division_name
@@ -219,8 +274,21 @@ def fetch_team_standing(db: Database, team_id: int) -> Optional[dict[str, Any]]:
 
 
 def fetch_team_roster_rows(db: Database, team_id: int) -> list[dict[str, Any]]:
+    players_table = "players"
+
+    speed_col = pick_existing_column(db, players_table, ["speed_rating", "speed"])
+    strength_col = pick_existing_column(db, players_table, ["strength_rating", "strength"])
+    awareness_col = pick_existing_column(db, players_table, ["awareness_rating", "awareness"])
+    cod_col = pick_existing_column(
+        db,
+        players_table,
+        ["change_of_direction_rating", "change_of_direction", "cod_rating", "cod"],
+    )
+    dev_trait_col = pick_existing_column(db, players_table, ["dev_trait"])
+    dev_trait_label_col = pick_existing_column(db, players_table, ["dev_trait_label", "development_trait", "trait_name"])
+
     rows = db.fetch_all(
-        """
+        f"""
         SELECT
             p.roster_id,
             p.full_name,
@@ -230,7 +298,13 @@ def fetch_team_roster_rows(db: Database, team_id: int) -> list[dict[str, Any]]:
             p.player_best_ovr,
             p.team_id,
             t.team_name,
-            t.team_ovr
+            t.team_ovr,
+            {sql_select("p", dev_trait_col, "dev_trait")},
+            {sql_select("p", dev_trait_label_col, "dev_trait_label")},
+            {sql_select("p", speed_col, "speed")},
+            {sql_select("p", strength_col, "strength")},
+            {sql_select("p", awareness_col, "awareness")},
+            {sql_select("p", cod_col, "change_of_direction")}
         FROM players p
         JOIN teams t ON t.team_id = p.team_id
         WHERE p.team_id = %s
@@ -240,6 +314,7 @@ def fetch_team_roster_rows(db: Database, team_id: int) -> list[dict[str, Any]]:
         """,
         (team_id,),
     )
+
     rows.sort(
         key=lambda row: (
             POSITION_SORT_ORDER.get(safe_text(row.get("position")).upper(), 999),
@@ -248,6 +323,29 @@ def fetch_team_roster_rows(db: Database, team_id: int) -> list[dict[str, Any]]:
         )
     )
     return rows
+
+
+def fetch_standings_rows(db: Database) -> list[dict[str, Any]]:
+    return db.fetch_all(
+        """
+        SELECT
+            t.team_name,
+            t.conference_name,
+            t.division_name,
+            t.team_ovr,
+            s.wins,
+            s.losses,
+            s.ties,
+            s.win_pct,
+            s.seed,
+            s.pts_for,
+            s.pts_against,
+            s.turnover_diff
+        FROM standings s
+        JOIN teams t ON t.team_id = s.team_id
+        ORDER BY s.wins DESC, s.win_pct DESC, s.pts_for DESC, t.team_name ASC
+        """
+    )
 
 
 def fetch_passing_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:

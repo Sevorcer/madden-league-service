@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
-
 from core.madden_queries import (
     fetch_team_roster_rows,
     fetch_team_standing,
+    resolve_dev_trait_label,
     resolve_display_overall,
     resolve_team_row,
     safe_float,
@@ -14,7 +13,7 @@ from core.madden_queries import (
 from database import Database
 
 
-def get_team_payload(db: Database, team_name: str) -> dict[str, Any]:
+def get_team_payload(db: Database, team_name: str) -> dict[str, object]:
     team = resolve_team_row(db, team_name)
     if not team:
         return {"status": "not_found", "team": None}
@@ -25,7 +24,6 @@ def get_team_payload(db: Database, team_name: str) -> dict[str, Any]:
         "team": {
             "team_id": safe_int(team.get("team_id")),
             "team_name": safe_text(team.get("team_name"), "Unknown Team"),
-            "team_abbrev": safe_text(team.get("team_abbrev"), "N/A"),
             "team_ovr": safe_int(team.get("team_ovr")),
             "conference_name": safe_text(team.get("conference_name"), "N/A"),
             "division_name": safe_text(team.get("division_name"), "N/A"),
@@ -41,7 +39,7 @@ def get_team_payload(db: Database, team_name: str) -> dict[str, Any]:
     }
 
 
-def get_team_roster_payload(db: Database, team_name: str) -> dict[str, Any]:
+def get_team_roster_payload(db: Database, team_name: str) -> dict[str, object]:
     team = resolve_team_row(db, team_name)
     if not team:
         return {"status": "not_found", "team": None, "roster": []}
@@ -55,7 +53,11 @@ def get_team_roster_payload(db: Database, team_name: str) -> dict[str, Any]:
                 "position": safe_text(row.get("position"), "N/A"),
                 "age": safe_int(row.get("age")),
                 "overall": resolve_display_overall(row),
-                "dev_trait": safe_text(row.get("resolved_dev_trait_label"), "Unknown"),
+                "dev_trait": resolve_dev_trait_label(row),
+                "speed": safe_int(row.get("speed")),
+                "strength": safe_int(row.get("strength")),
+                "awareness": safe_int(row.get("awareness")),
+                "change_of_direction": safe_int(row.get("change_of_direction")),
             }
         )
 
@@ -64,7 +66,6 @@ def get_team_roster_payload(db: Database, team_name: str) -> dict[str, Any]:
         "team": {
             "team_id": safe_int(team.get("team_id")),
             "team_name": safe_text(team.get("team_name"), "Unknown Team"),
-            "team_abbrev": safe_text(team.get("team_abbrev"), "N/A"),
         },
         "roster": roster,
     }
