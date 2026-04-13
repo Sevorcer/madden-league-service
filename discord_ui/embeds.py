@@ -4,12 +4,12 @@ import discord
 
 
 def ok_embed(title: str, description: str) -> discord.Embed:
-    return discord.Embed(title=title, description=description, color=0x57F287)
+    return discord.Embed(title=title, description=description, color=0x2ECC71)
 
 
 def error_embed(message: str) -> discord.Embed:
-    return discord.Embed(title="Error", description=message, color=0xED4245)
+    return discord.Embed(title="Error", description=message, color=0xE74C3C)
 
 
 def info_embed(title: str, description: str) -> discord.Embed:
-    return discord.Embed(title=title, description=description, color=0x5865F2)
+    return discord.Embed(title=title, description=description, color=0x3498DB)
