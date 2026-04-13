@@ -4,7 +4,6 @@ from typing import Any, Optional
 
 from database import Database
 
-
 DEV_TRAIT_LABELS = {
     0: "Normal",
     1: "Star",
@@ -52,6 +51,15 @@ def safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def safe_text(value: Any, default: str = "") -> str:
     if value is None:
         return default
@@ -59,45 +67,29 @@ def safe_text(value: Any, default: str = "") -> str:
     return text if text else default
 
 
-def normalize_search_text(value: str) -> str:
-    return " ".join(value.lower().strip().split())
+def dev_trait_to_label(raw_value: Any, fallback_label: str = "") -> str:
+    raw_int = safe_int(raw_value, -1)
+    if raw_int in DEV_TRAIT_LABELS:
+        return DEV_TRAIT_LABELS[raw_int]
+    fallback = safe_text(fallback_label)
+    return fallback or "Unknown"
 
 
-def resolve_player_overall(row: dict[str, Any]) -> int:
-    overall_candidates = [
+def resolve_display_overall(row: dict[str, Any]) -> int:
+    candidates = [
         row.get("overall_rating"),
         row.get("player_best_ovr"),
         row.get("team_ovr"),
     ]
-    for candidate in overall_candidates:
+    for candidate in candidates:
         value = safe_int(candidate, 0)
         if value > 0:
             return value
     return 0
 
 
-def resolve_dev_trait(row: dict[str, Any]) -> str:
-    raw = row.get("dev_trait")
-    if raw is not None:
-        raw_int = safe_int(raw, -1)
-        if raw_int in DEV_TRAIT_LABELS:
-            return DEV_TRAIT_LABELS[raw_int]
-
-    text_candidates = [
-        row.get("dev_trait_label"),
-        row.get("development_trait"),
-        row.get("trait_name"),
-    ]
-    for candidate in text_candidates:
-        text = safe_text(candidate)
-        if text:
-            return text
-
-    return "Unknown"
-
-
-def search_players(db: Database, query: str, limit: int = 10) -> list[dict[str, Any]]:
-    search_value = f"%{normalize_search_text(query)}%"
+def fetch_player_search_results(db: Database, name: str, limit: int = 10) -> list[dict[str, Any]]:
+    search = f"%{safe_text(name).lower()}%"
     rows = db.fetch_all(
         """
         SELECT
@@ -124,17 +116,14 @@ def search_players(db: Database, query: str, limit: int = 10) -> list[dict[str, 
             p.full_name ASC
         LIMIT %s
         """,
-        (search_value, query.strip(), f"{query.strip()}%", limit),
+        (search, safe_text(name), f"{safe_text(name)}%", limit),
     )
-
     for row in rows:
-        row["resolved_overall"] = resolve_player_overall(row)
-        row["resolved_dev_trait"] = resolve_dev_trait(row)
-
+        row["resolved_dev_trait_label"] = row.get("dev_trait_label")
     return rows
 
 
-def get_player_by_roster_id(db: Database, roster_id: int) -> Optional[dict[str, Any]]:
+def fetch_player_by_roster_id(db: Database, roster_id: int) -> Optional[dict[str, Any]]:
     row = db.fetch_one(
         """
         SELECT
@@ -156,13 +145,35 @@ def get_player_by_roster_id(db: Database, roster_id: int) -> Optional[dict[str, 
         (roster_id,),
     )
     if row:
-        row["resolved_overall"] = resolve_player_overall(row)
-        row["resolved_dev_trait"] = resolve_dev_trait(row)
+        row["resolved_dev_trait_label"] = row.get("dev_trait_label")
     return row
 
 
-def get_team_summary(db: Database, team_name: str) -> Optional[dict[str, Any]]:
-    search_value = f"%{normalize_search_text(team_name)}%"
+def fetch_standings_rows(db: Database) -> list[dict[str, Any]]:
+    return db.fetch_all(
+        """
+        SELECT
+            t.team_name,
+            t.conference_name,
+            t.division_name,
+            t.team_ovr,
+            s.wins,
+            s.losses,
+            s.ties,
+            s.win_pct,
+            s.seed,
+            s.pts_for,
+            s.pts_against,
+            s.turnover_diff
+        FROM standings s
+        JOIN teams t ON t.team_id = s.team_id
+        ORDER BY s.wins DESC, s.win_pct DESC, s.pts_for DESC, t.team_name ASC
+        """
+    )
+
+
+def resolve_team_row(db: Database, team_name: str) -> Optional[dict[str, Any]]:
+    search = f"%{safe_text(team_name).lower()}%"
     return db.fetch_one(
         """
         SELECT
@@ -171,18 +182,8 @@ def get_team_summary(db: Database, team_name: str) -> Optional[dict[str, Any]]:
             t.team_abbrev,
             t.team_ovr,
             t.conference_name,
-            t.division_name,
-            COALESCE(s.wins, 0) AS wins,
-            COALESCE(s.losses, 0) AS losses,
-            COALESCE(s.ties, 0) AS ties,
-            COALESCE(s.win_pct, 0) AS win_pct,
-            COALESCE(s.seed, 0) AS seed,
-            COALESCE(s.pts_for, 0) AS pts_for,
-            COALESCE(s.pts_against, 0) AS pts_against,
-            COALESCE(s.turnover_diff, 0) AS turnover_diff
+            t.division_name
         FROM teams t
-        LEFT JOIN standings s
-            ON s.team_id = t.team_id
         WHERE LOWER(COALESCE(t.team_name, '')) LIKE %s
         ORDER BY
             CASE
@@ -193,11 +194,31 @@ def get_team_summary(db: Database, team_name: str) -> Optional[dict[str, Any]]:
             t.team_name ASC
         LIMIT 1
         """,
-        (search_value, team_name.strip(), f"{team_name.strip()}%"),
+        (search, safe_text(team_name), f"{safe_text(team_name)}%"),
     )
 
 
-def get_team_roster(db: Database, team_name: str) -> list[dict[str, Any]]:
+def fetch_team_standing(db: Database, team_id: int) -> Optional[dict[str, Any]]:
+    return db.fetch_one(
+        """
+        SELECT
+            wins,
+            losses,
+            ties,
+            win_pct,
+            seed,
+            pts_for,
+            pts_against,
+            turnover_diff
+        FROM standings
+        WHERE team_id = %s
+        LIMIT 1
+        """,
+        (team_id,),
+    )
+
+
+def fetch_team_roster_rows(db: Database, team_id: int) -> list[dict[str, Any]]:
     rows = db.fetch_all(
         """
         SELECT
@@ -207,65 +228,29 @@ def get_team_roster(db: Database, team_name: str) -> list[dict[str, Any]]:
             p.age,
             p.overall_rating,
             p.player_best_ovr,
+            p.team_id,
             t.team_name,
             t.team_ovr
         FROM players p
-        JOIN teams t
-            ON t.team_id = p.team_id
-        WHERE LOWER(COALESCE(t.team_name, '')) LIKE %s
+        JOIN teams t ON t.team_id = p.team_id
+        WHERE p.team_id = %s
         ORDER BY
             COALESCE(NULLIF(p.overall_rating, 0), p.player_best_ovr, 0) DESC,
             p.full_name ASC
         """,
-        (f"%{normalize_search_text(team_name)}%",),
+        (team_id,),
     )
-
-    for row in rows:
-        row["resolved_overall"] = resolve_player_overall(row)
-        row["resolved_dev_trait"] = resolve_dev_trait(row)
-        row["position_sort"] = POSITION_SORT_ORDER.get(safe_text(row.get("position")).upper(), 999)
-
     rows.sort(
         key=lambda row: (
-            row.get("position_sort", 999),
-            -safe_int(row.get("resolved_overall")),
+            POSITION_SORT_ORDER.get(safe_text(row.get("position")).upper(), 999),
+            -resolve_display_overall(row),
             safe_text(row.get("full_name")).lower(),
         )
     )
     return rows
 
 
-def get_standings(db: Database) -> list[dict[str, Any]]:
-    return db.fetch_all(
-        """
-        SELECT
-            t.team_id,
-            t.team_name,
-            t.team_abbrev,
-            t.team_ovr,
-            t.conference_name,
-            t.division_name,
-            COALESCE(s.wins, 0) AS wins,
-            COALESCE(s.losses, 0) AS losses,
-            COALESCE(s.ties, 0) AS ties,
-            COALESCE(s.win_pct, 0) AS win_pct,
-            COALESCE(s.seed, 0) AS seed,
-            COALESCE(s.pts_for, 0) AS pts_for,
-            COALESCE(s.pts_against, 0) AS pts_against,
-            COALESCE(s.turnover_diff, 0) AS turnover_diff
-        FROM standings s
-        JOIN teams t
-            ON t.team_id = s.team_id
-        ORDER BY
-            COALESCE(s.wins, 0) DESC,
-            COALESCE(s.win_pct, 0) DESC,
-            COALESCE(s.pts_for, 0) DESC,
-            t.team_name ASC
-        """
-    )
-
-
-def get_passing_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
+def fetch_passing_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
     return db.fetch_all(
         """
         SELECT
@@ -274,10 +259,8 @@ def get_passing_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
             COALESCE(MAX(t.team_name), 'Unknown Team') AS team_name,
             SUM(COALESCE(pps.pass_yds, 0)) AS stat_value
         FROM player_passing_stats pps
-        LEFT JOIN players p
-            ON p.roster_id = pps.roster_id
-        LEFT JOIN teams t
-            ON t.team_id = COALESCE(p.team_id, pps.team_id)
+        LEFT JOIN players p ON p.roster_id = pps.roster_id
+        LEFT JOIN teams t ON t.team_id = COALESCE(p.team_id, pps.team_id)
         GROUP BY pps.roster_id
         ORDER BY stat_value DESC, player_name ASC
         LIMIT %s
@@ -286,7 +269,7 @@ def get_passing_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
     )
 
 
-def get_rushing_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
+def fetch_rushing_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
     return db.fetch_all(
         """
         SELECT
@@ -295,10 +278,8 @@ def get_rushing_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
             COALESCE(MAX(t.team_name), 'Unknown Team') AS team_name,
             SUM(COALESCE(prs.rush_yds, 0)) AS stat_value
         FROM player_rushing_stats prs
-        LEFT JOIN players p
-            ON p.roster_id = prs.roster_id
-        LEFT JOIN teams t
-            ON t.team_id = COALESCE(p.team_id, prs.team_id)
+        LEFT JOIN players p ON p.roster_id = prs.roster_id
+        LEFT JOIN teams t ON t.team_id = COALESCE(p.team_id, prs.team_id)
         GROUP BY prs.roster_id
         ORDER BY stat_value DESC, player_name ASC
         LIMIT %s
@@ -307,7 +288,7 @@ def get_rushing_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
     )
 
 
-def get_receiving_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
+def fetch_receiving_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
     return db.fetch_all(
         """
         SELECT
@@ -316,10 +297,8 @@ def get_receiving_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]
             COALESCE(MAX(t.team_name), 'Unknown Team') AS team_name,
             SUM(COALESCE(prs.rec_yds, 0)) AS stat_value
         FROM player_receiving_stats prs
-        LEFT JOIN players p
-            ON p.roster_id = prs.roster_id
-        LEFT JOIN teams t
-            ON t.team_id = COALESCE(p.team_id, prs.team_id)
+        LEFT JOIN players p ON p.roster_id = prs.roster_id
+        LEFT JOIN teams t ON t.team_id = COALESCE(p.team_id, prs.team_id)
         GROUP BY prs.roster_id
         ORDER BY stat_value DESC, player_name ASC
         LIMIT %s
@@ -328,7 +307,7 @@ def get_receiving_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]
     )
 
 
-def get_sack_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
+def fetch_sack_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
     return db.fetch_all(
         """
         SELECT
@@ -337,10 +316,8 @@ def get_sack_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
             COALESCE(MAX(t.team_name), 'Unknown Team') AS team_name,
             SUM(COALESCE(pds.def_sacks, 0)) AS stat_value
         FROM player_defense_stats pds
-        LEFT JOIN players p
-            ON p.roster_id = pds.roster_id
-        LEFT JOIN teams t
-            ON t.team_id = COALESCE(p.team_id, pds.team_id)
+        LEFT JOIN players p ON p.roster_id = pds.roster_id
+        LEFT JOIN teams t ON t.team_id = COALESCE(p.team_id, pds.team_id)
         GROUP BY pds.roster_id
         ORDER BY stat_value DESC, player_name ASC
         LIMIT %s
@@ -349,7 +326,7 @@ def get_sack_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
     )
 
 
-def get_interception_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
+def fetch_interception_leaders(db: Database, limit: int = 10) -> list[dict[str, Any]]:
     return db.fetch_all(
         """
         SELECT
@@ -358,10 +335,8 @@ def get_interception_leaders(db: Database, limit: int = 10) -> list[dict[str, An
             COALESCE(MAX(t.team_name), 'Unknown Team') AS team_name,
             SUM(COALESCE(pds.def_ints, 0)) AS stat_value
         FROM player_defense_stats pds
-        LEFT JOIN players p
-            ON p.roster_id = pds.roster_id
-        LEFT JOIN teams t
-            ON t.team_id = COALESCE(p.team_id, pds.team_id)
+        LEFT JOIN players p ON p.roster_id = pds.roster_id
+        LEFT JOIN teams t ON t.team_id = COALESCE(p.team_id, pds.team_id)
         GROUP BY pds.roster_id
         ORDER BY stat_value DESC, player_name ASC
         LIMIT %s
@@ -370,18 +345,16 @@ def get_interception_leaders(db: Database, limit: int = 10) -> list[dict[str, An
     )
 
 
-def get_stat_leaders(db: Database, category: str, limit: int = 10) -> list[dict[str, Any]]:
-    normalized = normalize_search_text(category)
-
-    if normalized in {"passing", "pass", "pass yards", "passing yards"}:
-        return get_passing_leaders(db, limit)
-    if normalized in {"rushing", "rush", "rush yards", "rushing yards"}:
-        return get_rushing_leaders(db, limit)
-    if normalized in {"receiving", "receive", "rec", "receiving yards"}:
-        return get_receiving_leaders(db, limit)
+def fetch_stat_leaders(db: Database, category: str, limit: int = 10) -> list[dict[str, Any]]:
+    normalized = safe_text(category).lower()
+    if normalized in {"passing", "pass", "passing yards", "pass yards"}:
+        return fetch_passing_leaders(db, limit)
+    if normalized in {"rushing", "rush", "rushing yards", "rush yards"}:
+        return fetch_rushing_leaders(db, limit)
+    if normalized in {"receiving", "rec", "receiving yards"}:
+        return fetch_receiving_leaders(db, limit)
     if normalized in {"sacks", "sack"}:
-        return get_sack_leaders(db, limit)
+        return fetch_sack_leaders(db, limit)
     if normalized in {"interceptions", "interception", "ints", "int"}:
-        return get_interception_leaders(db, limit)
-
+        return fetch_interception_leaders(db, limit)
     raise ValueError(f"Unsupported leader category: {category}")
