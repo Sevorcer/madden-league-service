@@ -1,2 +1,1 @@
-# madden-league-service
-
+# madden-export-receiver
