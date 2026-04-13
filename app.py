@@ -3,7 +3,11 @@ from discord.ext import commands
 
 from config import settings
 from database import Database
+from commands.admin_commands import register_admin_commands
 from commands.league_commands import register_league_commands
+from commands.media_commands import register_media_commands
+from commands.trade_commands import register_trade_commands
+from commands.ops_commands import register_ops_commands
 
 intents = discord.Intents.default()
 intents.guilds = True
@@ -12,26 +16,11 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 db = Database(settings)
 
-register_league_commands(bot)
-
-
-@bot.tree.command(name="ping", description="Check if the bot is online.")
-async def ping(interaction: discord.Interaction) -> None:
-    await interaction.response.send_message("Pong!")
-
-
-@bot.tree.command(name="healthcheck", description="Check bot and database health.")
-async def healthcheck(interaction: discord.Interaction) -> None:
-    try:
-        result = db.healthcheck()
-        server_time = result.get("server_time", "unknown")
-        await interaction.response.send_message(
-            f"✅ Bot is online. Database connected. Server time: {server_time}"
-        )
-    except Exception as exc:
-        await interaction.response.send_message(
-            f"❌ Database healthcheck failed: {exc}"
-        )
+register_admin_commands(bot, db)
+register_league_commands(bot, db)
+register_media_commands(bot, db)
+register_trade_commands(bot, db)
+register_ops_commands(bot, db)
 
 
 @bot.event
