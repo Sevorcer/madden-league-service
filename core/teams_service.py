@@ -54,10 +54,6 @@ def get_team_roster_payload(db: Database, team_name: str) -> dict[str, object]:
                 "age": safe_int(row.get("age")),
                 "overall": resolve_display_overall(row),
                 "dev_trait": resolve_dev_trait_label(row),
-                "speed": safe_int(row.get("speed")),
-                "strength": safe_int(row.get("strength")),
-                "awareness": safe_int(row.get("awareness")),
-                "change_of_direction": safe_int(row.get("change_of_direction")),
             }
         )
 

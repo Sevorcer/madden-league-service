@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from core.madden_queries import (
     fetch_player_by_roster_id,
     fetch_player_search_results,
@@ -13,7 +11,7 @@ from core.madden_queries import (
 from database import Database
 
 
-def build_player_card_data(row: dict[str, Any]) -> dict[str, Any]:
+def build_player_card_data(row: dict[str, object]) -> dict[str, object]:
     return {
         "roster_id": safe_int(row.get("roster_id")),
         "full_name": safe_text(row.get("full_name"), "Unknown Player"),
@@ -29,8 +27,9 @@ def build_player_card_data(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def get_player_search_payload(db: Database, name: str) -> dict[str, Any]:
+def get_player_search_payload(db: Database, name: str) -> dict[str, object]:
     results = fetch_player_search_results(db, name, limit=10)
+
     if not results:
         return {"status": "not_found", "results": [], "player": None}
 
@@ -51,7 +50,7 @@ def get_player_search_payload(db: Database, name: str) -> dict[str, Any]:
     }
 
 
-def get_player_by_roster_payload(db: Database, roster_id: int) -> dict[str, Any] | None:
+def get_player_by_roster_payload(db: Database, roster_id: int) -> dict[str, object] | None:
     row = fetch_player_by_roster_id(db, roster_id)
     if not row:
         return None
